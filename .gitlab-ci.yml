@@ -20,7 +20,7 @@ build:
   stage: build
   image: node:18-alpine
   script:
-    - npm ci --cache .npm --prefer-offline
+    - npm install --cache .npm --prefer-offline
     - npm run build
     - echo "Build completed successfully"
   artifacts:
