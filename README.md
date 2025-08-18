@@ -1,3 +1,3 @@
 # Digital-Library-API
 Demo application for GitLab CI/CD integration
-<!-- Trigger pipeline -->
+Just a comment
