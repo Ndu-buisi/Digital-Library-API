@@ -46,9 +46,100 @@ security_gate:
   image: alpine:latest
   script:
     - apk add --no-cache jq
-    - echo "Evaluating security scan results..."
-    - echo "Security gate evaluation completed"
-  allow_failure: true
+    - echo "🔍 Evaluating security scan results for deployment readiness..."
+    - |
+      # Initialize counters
+      TOTAL_CRITICAL=0
+      TOTAL_HIGH=0
+      TOTAL_SECRETS=0
+      BLOCKING_ISSUES=false
+      
+      echo "=== SECURITY SCAN EVALUATION ==="
+      
+      # Check dependency scanning results
+      if [ -f gl-dependency-scanning-report.json ]; then
+        CRITICAL_DEPS=$(jq -r '.vulnerabilities[] | select(.severity=="Critical") | .id' gl-dependency-scanning-report.json 2>/dev/null | wc -l)
+        HIGH_DEPS=$(jq -r '.vulnerabilities[] | select(.severity=="High") | .id' gl-dependency-scanning-report.json 2>/dev/null | wc -l)
+        TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_DEPS))
+        TOTAL_HIGH=$((TOTAL_HIGH + HIGH_DEPS))
+        
+        echo "📦 Dependency Vulnerabilities:"
+        echo "   Critical: $CRITICAL_DEPS"
+        echo "   High: $HIGH_DEPS"
+        
+        if [ "$CRITICAL_DEPS" -gt 0 ]; then
+          echo "🚨 CRITICAL DEPENDENCY VULNERABILITIES DETECTED:"
+          jq -r '.vulnerabilities[] | select(.severity=="Critical") | "   - " + .name + " (" + .severity + "): " + .description' gl-dependency-scanning-report.json 2>/dev/null
+          BLOCKING_ISSUES=true
+        fi
+      else
+        echo "⚠️ No dependency scan results found"
+      fi
+      
+      # Check SAST results  
+      if [ -f gl-sast-report.json ]; then
+        CRITICAL_SAST=$(jq -r '.vulnerabilities[] | select(.severity=="Critical") | .id' gl-sast-report.json 2>/dev/null | wc -l)
+        HIGH_SAST=$(jq -r '.vulnerabilities[] | select(.severity=="High") | .id' gl-sast-report.json 2>/dev/null | wc -l)
+        TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_SAST))
+        TOTAL_HIGH=$((TOTAL_HIGH + HIGH_SAST))
+        
+        echo "🔍 Static Analysis Vulnerabilities:"  
+        echo "   Critical: $CRITICAL_SAST"
+        echo "   High: $HIGH_SAST"
+        
+        if [ "$CRITICAL_SAST" -gt 0 ]; then
+          echo "🚨 CRITICAL CODE VULNERABILITIES DETECTED:"
+          jq -r '.vulnerabilities[] | select(.severity=="Critical") | "   - " + .name + ": " + .message' gl-sast-report.json 2>/dev/null
+          BLOCKING_ISSUES=true
+        fi
+      fi
+      
+      # Check secret detection
+      if [ -f gl-secret-detection-report.json ]; then
+        SECRETS_FOUND=$(jq -r '.vulnerabilities[] | .id' gl-secret-detection-report.json 2>/dev/null | wc -l)
+        TOTAL_SECRETS=$SECRETS_FOUND
+        
+        echo "🔑 Secrets Detection:"
+        echo "   Secrets found: $SECRETS_FOUND"
+        
+        if [ "$SECRETS_FOUND" -gt 0 ]; then
+          echo "🚨 HARDCODED SECRETS DETECTED:"
+          jq -r '.vulnerabilities[] | "   - " + .name + " in " + .location.file' gl-secret-detection-report.json 2>/dev/null
+          BLOCKING_ISSUES=true
+        fi
+      fi
+      
+      # Security decision logic
+      echo ""
+      echo "=== SECURITY GATE DECISION ==="
+      echo "Total Critical Issues: $TOTAL_CRITICAL"
+      echo "Total High Issues: $TOTAL_HIGH" 
+      echo "Total Secrets: $TOTAL_SECRETS"
+      echo ""
+      
+      if [ "$BLOCKING_ISSUES" = true ]; then
+        echo "❌ SECURITY GATE FAILED - DEPLOYMENT BLOCKED"
+        echo ""
+        echo "🛡️ REQUIRED ACTIONS:"
+        echo "1. Fix all critical vulnerabilities"
+        echo "2. Remove hardcoded secrets" 
+        echo "3. Obtain security team approval for exceptions"
+        echo ""
+        echo "📋 For security exceptions, create issue with:"
+        echo "- Business justification"
+        echo "- Risk assessment" 
+        echo "- Mitigation plan"
+        echo "- Timeline for permanent fix"
+        exit 1
+      else
+        echo "✅ SECURITY GATE PASSED - DEPLOYMENT APPROVED"
+        echo "No blocking security issues detected"
+      fi
+  dependencies:
+    - gemnasium-dependency_scanning
+    - semgrep-sast
+    - secrets-sast
+  allow_failure: false
   rules:
     - if: $CI_COMMIT_REF_NAME == "main"
     - if: $CI_PIPELINE_SOURCE == "external_pull_request_event"
