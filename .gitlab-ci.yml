@@ -12,19 +12,27 @@ build:
   stage: build
   image: node:18-alpine
   script:
-    - echo "🔧 Installing dependencies..."
+    - echo "=== PREPARING FILES FOR SECURITY SCANNING ==="
+    - echo "Installing dependencies to generate package-lock.json..."
     - npm install --package-lock-only
-    - echo "📦 Dependencies resolved successfully"
-    - echo "📁 Files prepared for security scanning"
+    - echo "Files available for dependency scanning:"
+    - ls -la package*.json
+    - echo "Package.json content verification:"
+    - head -10 package.json
+    - echo "Dependencies that should be detected by scanner:"
+    - grep -A 20 '"dependencies"' package.json
   artifacts:
     paths:
-      - package*.json
-      - node_modules/
-      - src/
-      - config/
-      - .env
-    expire_in: 2 hours
-    when: always
+      - package.json          # ← ESSENTIAL for dependency scanning
+      - package-lock.json     # ← ESSENTIAL for dependency scanning  
+      - node_modules/         # ← Helpful for analysis
+      - src/                  # ← For SAST scanning
+      - config/               # ← For secret detection
+      - .env                  # ← For secret detection
+      - "*.js"                # ← For SAST scanning
+      - "*.json"              # ← For configuration scanning
+    expire_in: 2 hours        # ← Long enough for security scans
+    when: always              # ← Create artifacts even if build fails
   cache:
     paths:
       - node_modules/
