@@ -40,30 +40,6 @@ build:
     paths:
       - .npm/
 
-debug_files:
-  stage: test
-  image: alpine:latest
-  script:
-    - echo "=== DEPENDENCY SCANNING FILE VERIFICATION ==="
-    - echo "📁 Available files:"
-    - ls -la
-    - echo ""
-    - echo "📦 Package.json exists: $(test -f package.json && echo '✅ YES' || echo '❌ NO')"
-    - echo "🔒 Package-lock.json exists: $(test -f package-lock.json && echo '✅ YES' || echo '❌ NO')"
-    - echo ""
-    - if [ -f package.json ]; then
-        echo "🔍 Dependencies in package.json:"
-        grep -A 15 '"dependencies"' package.json | grep -E '(lodash|axios|moment|handlebars|tar|minimist|jsonwebtoken)'
-      fi
-    - echo ""
-    - if [ -f package-lock.json ]; then
-        echo "🔒 Package-lock.json structure:"
-        echo "- Lockfile version: $(grep -o '"lockfileVersion":[0-9]*' package-lock.json)"
-        echo "- Dependencies count: $(grep -c '"version":' package-lock.json || echo '0')"
-      fi
-  dependencies:
-    - build
-  allow_failure: true
 
 test:unit:
   stage: test
