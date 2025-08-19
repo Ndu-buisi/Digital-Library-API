@@ -13,31 +13,57 @@ build:
   image: node:18-alpine
   script:
     - echo "=== PREPARING FILES FOR SECURITY SCANNING ==="
-    - echo "Installing dependencies to generate package-lock.json..."
-    - npm install --package-lock-only
-    - echo "Files available for dependency scanning:"
+    - echo "Generating fresh package-lock.json from package.json..."
+    - npm install --package-lock-only --no-audit
+    - echo ""
+    - echo "✅ Files created for dependency scanning:"
     - ls -la package*.json
-    - echo "Package.json content verification:"
-    - head -10 package.json
-    - echo "Dependencies that should be detected by scanner:"
-    - grep -A 20 '"dependencies"' package.json
+    - echo ""
+    - echo "📦 Package-lock.json verification:"
+    - head -10 package-lock.json
+    - echo ""
+    - echo "🔍 Vulnerable dependencies that should be detected:"
+    - echo "- lodash 4.17.15 (Prototype Pollution)"
+    - echo "- axios 0.19.2 (Server-side Request Forgery)"
+    - echo "- moment 2.24.0 (Regular Expression DoS)"
+    - echo "- handlebars 4.0.0 (Template Injection)"
   artifacts:
     paths:
-      - package.json          # ← ESSENTIAL for dependency scanning
-      - package-lock.json     # ← ESSENTIAL for dependency scanning  
-      - node_modules/         # ← Helpful for analysis
+      - package.json          # ← Original package.json
+      - package-lock.json     # ← Freshly generated lockfile
       - src/                  # ← For SAST scanning
-      - config/               # ← For secret detection
       - .env                  # ← For secret detection
-      - "*.js"                # ← For SAST scanning
-      - "*.json"              # ← For configuration scanning
-    expire_in: 2 hours        # ← Long enough for security scans
-    when: always              # ← Create artifacts even if build fails
+      - config/               # ← For secret detection
+    expire_in: 2 hours
+    when: always
   cache:
     paths:
-      - node_modules/
+      - .npm/
 
-
+debug_files:
+  stage: test
+  image: alpine:latest
+  script:
+    - echo "=== DEPENDENCY SCANNING FILE VERIFICATION ==="
+    - echo "📁 Available files:"
+    - ls -la
+    - echo ""
+    - echo "📦 Package.json exists: $(test -f package.json && echo '✅ YES' || echo '❌ NO')"
+    - echo "🔒 Package-lock.json exists: $(test -f package-lock.json && echo '✅ YES' || echo '❌ NO')"
+    - echo ""
+    - if [ -f package.json ]; then
+        echo "🔍 Dependencies in package.json:"
+        grep -A 15 '"dependencies"' package.json | grep -E '(lodash|axios|moment|handlebars|tar|minimist|jsonwebtoken)'
+      fi
+    - echo ""
+    - if [ -f package-lock.json ]; then
+        echo "🔒 Package-lock.json structure:"
+        echo "- Lockfile version: $(grep -o '"lockfileVersion":[0-9]*' package-lock.json)"
+        echo "- Dependencies count: $(grep -c '"version":' package-lock.json || echo '0')"
+      fi
+  dependencies:
+    - build
+  allow_failure: true
 
 test:unit:
   stage: test
