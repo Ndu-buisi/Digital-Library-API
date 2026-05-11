@@ -14,7 +14,7 @@
     "express": "4.16.0",
     "lodash": "4.17.15",
     "moment": "2.24.0",
-    "axios": "0.19.2",
+    "axios": "1.7.9",
     "jsonwebtoken": "8.5.0",
     "debug": "2.2.0",
     "minimist": "1.2.0",
