@@ -1,43 +1,55 @@
 const express = require('express');
-const mysql = require('mysql2'); // SQL injection prone
-const { exec } = require('child_process'); // Command injection prone
+const mysql = require('mysql2');
+const { execFile } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// SAST ISSUE 1: Hardcoded credentials (High severity)
-const DB_PASSWORD = "admin123456";
-const JWT_SECRET = "my-super-secret-jwt-key-12345";
-const API_KEY = "sk-1234567890abcdefghijklmnopqrstuvwxyz";
+// Credentials loaded from environment variables only
+const DB_PASSWORD = process.env.DB_PASSWORD;
+const JWT_SECRET = process.env.JWT_SECRET;
+const API_KEY = process.env.API_KEY;
 
-// SAST ISSUE 2: SQL Injection vulnerability (Critical severity)
+// Database connection using env vars
 const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'admin',
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'admin',
   password: DB_PASSWORD,
-  database: 'library'
+  database: process.env.DB_NAME || 'library'
 });
 
 app.use(express.json());
 
-// SAST ISSUE 3: Direct SQL injection (Critical)
+// FIX 1: Parameterized query to prevent SQL Injection
 app.get('/user/:id', (req, res) => {
   const userId = req.params.id;
-  // Direct string concatenation = SQL injection
-  const query = "SELECT * FROM users WHERE id = " + userId;
-  db.execute(query, (err, results) => {
+  // Use parameterized query — never concatenate user input into SQL
+  const query = 'SELECT * FROM users WHERE id = ?';
+  db.execute(query, [userId], (err, results) => {
     if (err) return res.status(500).send('Database error');
     res.json(results);
   });
 });
 
-// SAST ISSUE 4: Command injection (High severity)
+// FIX 2: Use execFile() with argument array + input validation to prevent OS Command Injection
+function isValidHost(host) {
+  const ipv4Regex = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/;
+  const hostnameRegex = /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+  return ipv4Regex.test(host) || hostnameRegex.test(host);
+}
+
 app.get('/ping/:host', (req, res) => {
   const host = req.params.host;
-  // Direct command execution with user input
-  exec(`ping -c 4 ${host}`, (error, stdout, stderr) => {
+
+  if (!isValidHost(host)) {
+    return res.status(400).json({ error: 'Invalid host format' });
+  }
+
+  // execFile does not spawn a shell — arguments are passed directly
+  execFile('ping', ['-c', '4', host], { timeout: 10000 }, (error, stdout, stderr) => {
     if (error) {
       return res.status(500).json({ error: 'Ping failed' });
     }
@@ -45,12 +57,19 @@ app.get('/ping/:host', (req, res) => {
   });
 });
 
-// SAST ISSUE 5: Path traversal (High severity) 
+// FIX 3: Prevent path traversal by resolving and validating the final path
+const UPLOADS_DIR = path.resolve(__dirname, '..', 'uploads');
+
 app.get('/download/:filename', (req, res) => {
   const filename = req.params.filename;
-  // No path validation = directory traversal
-  const filePath = `./uploads/${filename}`;
-  fs.readFile(filePath, (err, data) => {
+  const resolvedPath = path.resolve(UPLOADS_DIR, filename);
+
+  // Ensure the resolved path stays within the uploads directory
+  if (!resolvedPath.startsWith(UPLOADS_DIR + path.sep)) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+
+  fs.readFile(resolvedPath, (err, data) => {
     if (err) {
       return res.status(404).json({ error: 'File not found' });
     }
@@ -58,59 +77,51 @@ app.get('/download/:filename', (req, res) => {
   });
 });
 
-// SAST ISSUE 6: Weak cryptography (Medium severity)
+// FIX 4: Use SHA-256 instead of broken MD5 for hashing
 app.post('/hash', (req, res) => {
   const { password } = req.body;
-  // MD5 is cryptographically broken
-  const hash = crypto.createHash('md5').update(password).digest('hex');
+  if (!password || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Invalid input' });
+  }
+  // SHA-256 — for production password storage, use bcrypt/argon2 instead
+  const hash = crypto.createHash('sha256').update(password).digest('hex');
   res.json({ hash });
 });
 
-// SAST ISSUE 7: Information disclosure (Medium severity)
-app.get('/debug', (req, res) => {
-  // Exposing internal system information
-  res.json({
-    env: process.env,
-    version: process.version,
-    platform: process.platform,
-    memory: process.memoryUsage(),
-    secret: JWT_SECRET // Exposing secrets
-  });
-});
+// FIX 5: Remove /debug endpoint — never expose env vars or secrets
+// The /debug route has been removed entirely.
 
-// SAST ISSUE 8: Unsafe deserialization (High severity)
-app.post('/deserialize', (req, res) => {
-  try {
-    // Unsafe JSON parsing without validation
-    const data = JSON.parse(req.body.data);
-    eval(data.code); // Code injection via eval
-    res.json({ status: 'executed' });
-  } catch (error) {
-    res.status(500).json({ error: 'Execution failed' });
-  }
-});
+// FIX 6: Remove unsafe deserialization + eval endpoint
+// The /deserialize route has been removed entirely.
 
-// SAST ISSUE 9: Regex DoS (Medium severity)
+// FIX 7: Safe regex — no catastrophic backtracking
 app.get('/validate/:input', (req, res) => {
   const input = req.params.input;
-  // Catastrophic backtracking regex
-  const vulnerableRegex = /^(a+)+$/;
-  const isValid = vulnerableRegex.test(input);
+  // Replaced vulnerable /^(a+)+$/ with a safe equivalent
+  const safeRegex = /^a+$/;
+  const isValid = safeRegex.test(input);
   res.json({ valid: isValid });
 });
 
-// SAST ISSUE 10: XSS via template (Medium severity)
+// FIX 8: Encode output to prevent XSS
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 app.get('/greet/:name', (req, res) => {
-  const name = req.params.name;
-  // Direct template injection
-  const template = `<h1>Hello ${name}!</h1>`;
-  res.send(template);
+  const name = escapeHtml(req.params.name);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<h1>Hello ${name}!</h1>`);
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Database password: ${DB_PASSWORD}`); // Password in logs
-  console.log(`JWT Secret: ${JWT_SECRET}`); // Secret in logs
+  // Credentials are never logged
 });
 
 module.exports = app;
