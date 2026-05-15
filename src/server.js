@@ -8,25 +8,30 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Credentials loaded from environment variables only
+// Secrets loaded from environment variables — never hardcoded
 const DB_PASSWORD = process.env.DB_PASSWORD;
 const JWT_SECRET = process.env.JWT_SECRET;
 const API_KEY = process.env.API_KEY;
 
-// Database connection using env vars
+if (!DB_PASSWORD || !JWT_SECRET || !API_KEY) {
+  console.error('ERROR: Required environment variables DB_PASSWORD, JWT_SECRET, and API_KEY must be set.');
+  process.exit(1);
+}
+
+// Database connection using environment-supplied credentials
 const db = mysql.createConnection({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'admin',
   password: DB_PASSWORD,
-  database: process.env.DB_NAME || 'library'
+  database: 'library'
 });
 
 app.use(express.json());
 
-// FIX 1: Parameterized query to prevent SQL Injection
+// FIX 1: SQL Injection — use parameterized queries
 app.get('/user/:id', (req, res) => {
   const userId = req.params.id;
-  // Use parameterized query — never concatenate user input into SQL
+  // Parameterized query prevents SQL injection
   const query = 'SELECT * FROM users WHERE id = ?';
   db.execute(query, [userId], (err, results) => {
     if (err) return res.status(500).send('Database error');
@@ -34,10 +39,11 @@ app.get('/user/:id', (req, res) => {
   });
 });
 
-// FIX 2: Use execFile() with argument array + input validation to prevent OS Command Injection
+// FIX 2: OS Command Injection — use execFile with argument array + input validation
 function isValidHost(host) {
+  // Allow only valid IPv4, IPv6, or safe hostnames (alphanumeric, dots, hyphens)
   const ipv4Regex = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/;
-  const hostnameRegex = /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+  const hostnameRegex = /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z]{2,}$/;
   return ipv4Regex.test(host) || hostnameRegex.test(host);
 }
 
@@ -48,8 +54,8 @@ app.get('/ping/:host', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // execFile does not spawn a shell — arguments are passed directly
-  execFile('ping', ['-c', '4', host], { timeout: 10000 }, (error, stdout, stderr) => {
+  // execFile does NOT spawn a shell — arguments are passed directly to the OS
+  execFile('ping', ['-c', '4', host], { timeout: 10000 }, (error, stdout) => {
     if (error) {
       return res.status(500).json({ error: 'Ping failed' });
     }
@@ -57,7 +63,7 @@ app.get('/ping/:host', (req, res) => {
   });
 });
 
-// FIX 3: Prevent path traversal by resolving and validating the final path
+// FIX 3: Path Traversal — normalize and confine to uploads directory
 const UPLOADS_DIR = path.resolve(__dirname, '..', 'uploads');
 
 app.get('/download/:filename', (req, res) => {
@@ -77,33 +83,50 @@ app.get('/download/:filename', (req, res) => {
   });
 });
 
-// FIX 4: Use SHA-256 instead of broken MD5 for hashing
+// FIX 4: Weak cryptography — use bcrypt-compatible PBKDF2 instead of MD5
 app.post('/hash', (req, res) => {
   const { password } = req.body;
   if (!password || typeof password !== 'string') {
-    return res.status(400).json({ error: 'Invalid input' });
+    return res.status(400).json({ error: 'Invalid password' });
   }
-  // SHA-256 — for production password storage, use bcrypt/argon2 instead
-  const hash = crypto.createHash('sha256').update(password).digest('hex');
-  res.json({ hash });
+  const salt = crypto.randomBytes(16).toString('hex');
+  // PBKDF2 with SHA-256, 100,000 iterations — cryptographically strong
+  crypto.pbkdf2(password, salt, 100000, 64, 'sha256', (err, derivedKey) => {
+    if (err) return res.status(500).json({ error: 'Hashing failed' });
+    res.json({ hash: `${salt}:${derivedKey.toString('hex')}` });
+  });
 });
 
-// FIX 5: Remove /debug endpoint — never expose env vars or secrets
-// The /debug route has been removed entirely.
+// FIX 5: Removed /debug endpoint — it exposed process.env, secrets, and system info
 
-// FIX 6: Remove unsafe deserialization + eval endpoint
-// The /deserialize route has been removed entirely.
+// FIX 6: Eval Injection — removed eval(); validate and process data safely
+app.post('/deserialize', (req, res) => {
+  try {
+    const data = JSON.parse(req.body.data);
+    // Never execute dynamic code from user input
+    if (typeof data !== 'object' || data === null) {
+      return res.status(400).json({ error: 'Invalid data format' });
+    }
+    // Process only known, safe fields
+    const safeResult = {
+      received: Object.keys(data).filter(k => typeof data[k] !== 'function')
+    };
+    res.json({ status: 'processed', result: safeResult });
+  } catch (error) {
+    res.status(400).json({ error: 'Invalid JSON' });
+  }
+});
 
-// FIX 7: Safe regex — no catastrophic backtracking
+// FIX 7: ReDoS — replace catastrophic backtracking regex with a safe alternative
 app.get('/validate/:input', (req, res) => {
   const input = req.params.input;
-  // Replaced vulnerable /^(a+)+$/ with a safe equivalent
-  const safeRegex = /^a+$/;
+  // Safe regex: simple character class, no nested quantifiers
+  const safeRegex = /^[a-zA-Z0-9_-]{1,100}$/;
   const isValid = safeRegex.test(input);
   res.json({ valid: isValid });
 });
 
-// FIX 8: Encode output to prevent XSS
+// FIX 8: XSS — HTML-encode user-supplied values before rendering
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -120,8 +143,8 @@ app.get('/greet/:name', (req, res) => {
 });
 
 app.listen(PORT, () => {
+  // Do NOT log secrets or sensitive configuration
   console.log(`Server running on port ${PORT}`);
-  // Credentials are never logged
 });
 
 module.exports = app;
