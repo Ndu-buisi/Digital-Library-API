@@ -1,6 +1,6 @@
 const express = require('express');
 const mysql = require('mysql2'); // SQL injection prone
-const { exec } = require('child_process'); // Command injection prone
+const { execFile } = require('child_process'); // Use execFile to avoid shell interpretation
 const fs = require('fs');
 const crypto = require('crypto');
 
@@ -33,11 +33,21 @@ app.get('/user/:id', (req, res) => {
   });
 });
 
-// SAST ISSUE 4: Command injection (High severity)
+// SAST ISSUE 4: Command injection (Fixed)
+// Validate host against a strict allowlist pattern (hostname or IPv4 address only)
+const SAFE_HOST_PATTERN = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$|^(?:\d{1,3}\.){3}\d{1,3}$/;
+
 app.get('/ping/:host', (req, res) => {
   const host = req.params.host;
-  // Direct command execution with user input
-  exec(`ping -c 4 ${host}`, (error, stdout, stderr) => {
+
+  // Reject any input that does not match the safe hostname/IP pattern
+  if (!SAFE_HOST_PATTERN.test(host)) {
+    return res.status(400).json({ error: 'Invalid host parameter' });
+  }
+
+  // Use execFile instead of exec: arguments are passed as an array,
+  // never interpreted by a shell, eliminating command injection risk.
+  execFile('ping', ['-c', '4', host], { timeout: 10000 }, (error, stdout, stderr) => {
     if (error) {
       return res.status(500).json({ error: 'Ping failed' });
     }
