@@ -1,23 +1,29 @@
-FROM node:16.14.0
+FROM node:18-alpine
 
-# Running as root (security issue)
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies including vulnerable ones
+# Install production dependencies only
 RUN npm ci --only=production
 
 # Copy application code
 COPY src/ ./src/
-COPY tests/ ./tests/
+
+# Create uploads directory with restricted permissions
+RUN mkdir -p /app/uploads && chmod 750 /app/uploads
+
+# FIX: Run as a non-root user (principle of least privilege)
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+RUN chown -R appuser:appgroup /app
+USER appuser
 
 # Expose port
 EXPOSE 3000
 
-# Create uploads directory with overly permissive permissions
-RUN mkdir -p /app/uploads && chmod 777 /app/uploads
+# FIX: Add HEALTHCHECK so orchestrators can detect unhealthy containers
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
-# Running as root user (security vulnerability)
 CMD ["node", "src/server.js"]
